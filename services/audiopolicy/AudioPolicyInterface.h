@@ -503,7 +503,8 @@ public:
      */
     virtual status_t getSpatializerOutput(const audio_config_base_t *config,
                                             const audio_attributes_t *attr,
-                                            audio_io_handle_t *output) = 0;
+                                            audio_io_handle_t *output,
+                                            bool checkClientRoutes = true) = 0;
 
     /**
      * Closes a previously opened specialized spatializer output.
@@ -511,6 +512,17 @@ public:
      * @return NO_ERROR if an output was closed, INVALID_OPERATION or BAD_VALUE otherwise
      */
     virtual status_t releaseSpatializerOutput(audio_io_handle_t output) = 0;
+
+    /**
+     * Closes a previously released spatializer output once tracks have finished
+     * restoring onto a non-spatializer output.
+     */
+    virtual status_t closeReleasedSpatializerOutput(audio_io_handle_t output) = 0;
+
+    /**
+     * Re-evaluates active clients to move eligible tracks onto the spatializer output.
+     */
+    virtual void checkVirtualizerClientRoutes() = 0;
 
     /**
      * Query how the direct playback is currently supported on the device.
@@ -723,6 +735,8 @@ public:
                                              media::DeviceConnectedState state) = 0;
 
     virtual status_t invalidateTracks(const std::vector<audio_port_handle_t>& portIds) = 0;
+
+    virtual status_t closeSpatializerOutput(audio_io_handle_t output, int delayMs) = 0;
 
     // Get the attributes of the mix port when connecting to the given device port.
     // If `mixPortHalId` is not `AUDIO_PORT_HANDLE_NONE`, it will be used to determine

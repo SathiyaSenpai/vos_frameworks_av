@@ -7065,9 +7065,12 @@ bool AudioPolicyManager::isOutputOnlyAvailableRouteToSomeDevice(
 }
 
 
+static constexpr int kSpatializerCloseDelayMs = 500;
+
 status_t AudioPolicyManager::getSpatializerOutput(const audio_config_base_t *mixerConfig,
                                                         const audio_attributes_t *attr,
-                                                        audio_io_handle_t *output) {
+                                                        audio_io_handle_t *output,
+                                                        bool checkClientRoutes) {
     *output = AUDIO_IO_HANDLE_NONE;
 
     DeviceVector devices = mEngine->getOutputDevicesForAttributes(*attr, /* uid */ 0, nullptr,
@@ -7133,7 +7136,9 @@ status_t AudioPolicyManager::getSpatializerOutput(const audio_config_base_t *mix
         }
     }
 
-    checkVirtualizerClientRoutes();
+    if (checkClientRoutes) {
+        checkVirtualizerClientRoutes();
+    }
 
     if (outputsChanged) {
         mPreviousOutputs = mOutputs;
@@ -7158,12 +7163,55 @@ status_t AudioPolicyManager::releaseSpatializerOutput(audio_io_handle_t output) 
     }
 
     if (!isOutputOnlyAvailableRouteToSomeDevice(mSpatializerOutput)) {
-        ALOGV("%s closing spatializer output %d", __func__, mSpatializerOutput->mIoHandle);
-        closeOutput(mSpatializerOutput->mIoHandle);
-        //from now on mSpatializerOutput is null
-        checkVirtualizerClientRoutes();
+        PortHandleVector clientsToInvalidate;
+        for (const sp<TrackClientDescriptor>& client :
+                mSpatializerOutput->getClientIterable()) {
+            clientsToInvalidate.push_back(client->portId());
+        }
+        const bool wasActive = mSpatializerOutput->isActive();
+        // Clear before invalidation so restored tracks route away from this output.
+        mSpatializerOutput.clear();
+        if (!clientsToInvalidate.empty()) {
+            mpClientInterface->invalidateTracks(clientsToInvalidate);
+        }
+        // Keep the spatializer thread open briefly while tracks restore to
+        // deep_buffer/offload so active BT A2DP streams do not suspend mid-handoff.
+        if ((!clientsToInvalidate.empty() || wasActive)
+                && mpClientInterface->closeSpatializerOutput(
+                        output, kSpatializerCloseDelayMs) == NO_ERROR) {
+            mSpatializerReleaseTimeNs = systemTime();
+            ALOGV("%s deferring close of spatializer output %d", __func__, output);
+        } else {
+            ALOGV("%s closing spatializer output %d", __func__, output);
+            closeOutput(output);
+        }
     }
 
+    return NO_ERROR;
+}
+
+status_t AudioPolicyManager::closeReleasedSpatializerOutput(audio_io_handle_t output) {
+    ssize_t index = mOutputs.indexOfKey(output);
+    if (index < 0) {
+        return NO_ERROR;
+    }
+    sp<SwAudioOutputDescriptor> desc = mOutputs.valueAt(index);
+    if (desc == nullptr || desc == mSpatializerOutput) {
+        return NO_ERROR;
+    }
+    const nsecs_t elapsedNs = systemTime() - mSpatializerReleaseTimeNs;
+    const nsecs_t minDelayNs = ms2ns(kSpatializerCloseDelayMs - 50);
+    if (elapsedNs < minDelayNs) {
+        const int remainingMs = std::max(
+                1, static_cast<int>(ns2ms(ms2ns(kSpatializerCloseDelayMs) - elapsedNs)));
+        if (mpClientInterface->closeSpatializerOutput(output, remainingMs) == NO_ERROR) {
+            return NO_ERROR;
+        }
+    }
+    if (!isOutputOnlyAvailableRouteToSomeDevice(desc)) {
+        ALOGV("%s closing released spatializer output %d", __func__, output);
+        closeOutput(output);
+    }
     return NO_ERROR;
 }
 

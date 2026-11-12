@@ -397,4 +397,10 @@ status_t AudioPolicyService::AudioPolicyClient::getFlushFromFrameSupport(
     return af->getFlushFromFrameSupport(aidlModule, config, support);
 }
 
+status_t AudioPolicyService::AudioPolicyClient::closeSpatializerOutput(
+        audio_io_handle_t output, int delayMs) {
+    mAudioPolicyService->onCloseSpatializerOutput(output, delayMs);
+    return NO_ERROR;
+}
+
 } // namespace android
